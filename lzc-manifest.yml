@@ -1,0 +1,61 @@
+application:
+  subdomain: rallly
+  multi_instance: false
+  upstreams:
+    - location: /package-licenses/
+      backend: file:///lzcapp/pkg/content/licenses/
+    - location: /
+      backend: http://rallly:3000/
+
+services:
+  db:
+    image: docker.1ms.run/library/postgres:18-alpine
+    environment:
+      - POSTGRES_DB=rallly
+      - POSTGRES_USER=postgres
+      - |-
+        POSTGRES_PASSWORD={{ stable_secret "rallly_db_password" | replace "\r" "" | replace "\n" "" }}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U postgres
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    binds:
+      - /lzcapp/var/pgdata:/var/lib/postgresql
+
+  rallly:
+    # upstream: lukevella/rallly:4.9.2
+    image: docker.1ms.run/lukevella/rallly:4.9.2
+    depends_on:
+      - db
+    environment:
+      - |-
+        DATABASE_URL=postgres://postgres:{{ stable_secret "rallly_db_password" | replace "\r" "" | replace "\n" "" }}@db:5432/rallly
+      - |-
+        SECRET_PASSWORD={{ stable_secret "rallly_secret" | replace "\r" "" | replace "\n" "" }}
+      - |-
+        NEXT_PUBLIC_BASE_URL=https://{{ .S.AppDomain }}
+      - SELF_HOSTED=true
+      - TZ=Asia/Shanghai
+
+usage: |
+  Rallly 是会议时间投票工具：把几个候选时间发出去，让大家勾选，自动排出最合适的档期。
+
+  使用方法：
+  1. 打开应用，用邮箱注册第一个账号（本应用自己的账号）。
+  2. 新建一个投票，添加候选日期和时间，把链接发给参与者。
+  3. 大家勾选后，在结果页能看到哪个时段最多人方便。
+
+  数据与安全：
+  - 投票、账号与选项数据保存在 PostgreSQL（/lzcapp/var/pgdata），卸载应用会一并删除，请定期备份。
+  - 数据库密码与会话密钥由平台稳定密钥生成，每个部署不同，不写成固定值。
+  - 本包不预置账号或默认口令，首个账号由你本人注册。
+  - 应用经懒猫入口鉴权访问，未开放无需登录的接口路径。
+
+  说明：
+  - 本应用包含两个容器（应用本体 + PostgreSQL），启动顺序由依赖关系保证。
+  - 未配置邮件服务，依赖邮件的找回密码流程不可用。
+  - 未做真机验证：注册登录、创建投票、参与者勾选、结果统计以及重启后持久化均未在设备上实测。

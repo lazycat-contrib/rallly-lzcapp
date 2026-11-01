@@ -1,0 +1,18 @@
+package: community.lazycat.app.rallly
+name: Rallly
+version: 4.9.2
+description: "Group scheduling polls to find the best meeting time without back-and-forth."
+min_os_version: "1.5.0"
+homepage: https://github.com/lukevella/rallly
+author: lukevella
+license: AGPL-3.0
+permissions:
+  required:
+    - net.internet
+locales:
+  zh:
+    name: Rallly
+    description: "会议时间投票：把候选时间发给大家勾选，自动算出最合适的档期。"
+  en:
+    name: Rallly
+    description: "Group scheduling polls to find the best meeting time without back-and-forth."
