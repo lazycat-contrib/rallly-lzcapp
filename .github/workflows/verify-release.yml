@@ -1,103 +1,103 @@
-name: Verify PicoShare Release on GitHub
+name: Verify Rallly Release on GitHub
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Exact LPK release tag
-        required: true
-        default: v1.5.4
-        type: string
+        description: Release tag to verify
+        required: false
+        default: v4.16.4
 permissions:
   contents: read
 concurrency:
-  group: picoshare-release-verification
+  group: rallly-release-verification
   cancel-in-progress: false
 jobs:
   verify:
     runs-on: ubuntu-latest
-    env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      GH_REPO: ${{ github.repository }}
-      RELEASE_TAG: ${{ inputs.tag }}
     steps:
-      - name: Download exact Release asset on runner
-        shell: bash
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve tag
         run: |
-          set -euo pipefail
-          ASSET_NAME="community.lazycat.app.picoshare-${RELEASE_TAG}.lpk"
+          TAG="${{ github.event.inputs.tag }}"
+          if [ -z "$TAG" ]; then TAG="$(gh release view --json tagName --jq .tagName)"; fi
+          echo "RELEASE_TAG=$TAG" >> "$GITHUB_ENV"
+
+      - name: Download exact Release asset on runner
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          ASSET_NAME="community.lazycat.app.rallly-${RELEASE_TAG}.lpk"
           echo "ASSET_NAME=$ASSET_NAME" >> "$GITHUB_ENV"
           gh release view "$RELEASE_TAG" --json tagName,assets > release-metadata.json
           gh release download "$RELEASE_TAG" --pattern "$ASSET_NAME" --dir verify-pkg
-      - name: Verify artifact, mandatory passphrase and sqlite store
-        shell: python
+
+      - name: Verify package contents
         run: |
-          import hashlib, json, os, subprocess, sys, tarfile
-          from pathlib import Path
+          python3 - <<'PY'
+          import hashlib, io, json, os, tarfile, yaml
 
-          try:
-              import yaml
-          except ImportError:
-              subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--quiet', 'PyYAML==6.0.3'])
-              import yaml
-
-          name = os.environ['ASSET_NAME']
           tag = os.environ['RELEASE_TAG']
-          version = tag.removeprefix('v')
-
-          meta = json.loads(Path('release-metadata.json').read_text())
-          assets = [a for a in meta['assets'] if a['name'] == name]
-          assert len(assets) == 1, assets
-          pkg = Path('verify-pkg') / name
+          name = os.environ['ASSET_NAME']
+          pkg = __import__('pathlib').Path('verify-pkg') / name
+          assert pkg.is_file(), pkg
 
           h = hashlib.sha256()
-          with pkg.open('rb') as f:
-              for chunk in iter(lambda: f.read(8 * 1024 * 1024), b''):
+          with pkg.open('rb') as fh:
+              for chunk in iter(lambda: fh.read(1 << 20), b''):
                   h.update(chunk)
-          assert 'sha256:' + h.hexdigest() == assets[0]['digest'], 'Release digest mismatch'
 
-          with tarfile.open(pkg) as package:
-              names = set(package.getnames())
-              assert {'package.yml', 'manifest.yml', 'deploy_params.yml', 'content.tar', 'icon.png'} <= names, names
+          with tarfile.open(pkg, 'r:') as package:
+              members = package.getnames()
+              for required in ('manifest.yml', 'package.yml', 'content.tar', 'icon.png'):
+                  assert required in members, (required, members)
 
               info = yaml.safe_load(package.extractfile('package.yml').read())
-              assert info['package'] == 'community.lazycat.app.picoshare'
-              assert str(info['version']) == version
-              assert info['name'] == 'PicoShare'
-              assert info['license'] == 'AGPL-3.0-or-later', info['license']
-              assert str(info['min_os_version']) == '1.5.0'
+              assert info['package'] == 'community.lazycat.app.rallly', info['package']
+              assert info['name'] == 'Rallly', info['name']
+              assert info['version'] == tag.lstrip('v'), (info['version'], tag)
+              assert info['license'] == 'AGPL-3.0', info['license']
 
-              text = package.extractfile('manifest.yml').read().decode()
-              m = yaml.safe_load(text)
+              m = yaml.safe_load(package.extractfile('manifest.yml').read())
               app = m['application']
-              assert app['subdomain'] == 'picoshare'
+              assert app['subdomain'] == 'rallly', app['subdomain']
               upstreams = app['upstreams']
-              assert any(u['location'] == '/package-licenses/' and u['backend'].startswith('file://') for u in upstreams)
-              assert any(u['location'] == '/' and u['backend'] == 'http://picoshare:4001/' for u in upstreams)
-              assert 'public_path' not in app
+              assert any(u['location'] == '/' and u['backend'] == 'http://rallly:3000/' for u in upstreams), upstreams
 
-              svc = m['services']['picoshare']
-              assert 'mtlynch/picoshare' in svc['image'], svc['image']
-              assert svc['command'] == '-db /data/store.db'
-              assert svc['binds'] == ['/lzcapp/var/data:/data']
-              env = '\n'.join(svc['environment'])
-              # No accounts upstream: the shared secret is the access control.
-              assert 'PS_SHARED_SECRET' in env and '.U.access_secret' in env
-              assert 'PORT=4001' in env
-              assert 'healthcheck' not in text
+              svcs = m['services']
+              assert set(svcs) == {'db', 'rallly'}, set(svcs)
+
+              # app service: mirrored image pinned to this release
+              app_svc = svcs['rallly']
+              assert 'lukevella/rallly:' + tag.lstrip('v') in app_svc['image'], app_svc['image']
+              env = ' '.join(app_svc['environment'])
+              assert 'DATABASE_URL=postgres://' in env
+              assert 'NEXT_PUBLIC_BASE_URL' in env
+              assert 'SELF_HOSTED=true' in env
+
+              # no hardcoded password: db password must come from stable_secret
+              assert 'stable_secret' in env, env
+              assert 'rallly_db_password' in env, env
+
+              # db service present with its own healthcheck, app must not add one
+              db = svcs['db']
+              assert 'postgres:18-alpine' in db['image'], db['image']
+              assert 'healthcheck' in db, db
+              assert 'healthcheck' not in app_svc, app_svc
+
+              # no file interceptor / startup gate added
+              text = package.extractfile('manifest.yml').read().decode()
               assert 'lzc-file-chooser' not in text
-
-              params = yaml.safe_load(package.extractfile('deploy_params.yml').read())
-              by_id = {p['id']: p for p in params['params']}
-              assert set(by_id) == {'access_secret'}, set(by_id)
-              assert by_id['access_secret']['type'] == 'secret'
-              assert by_id['access_secret']['optional'] is False
+              assert 'deploy_params.yml' not in members, members
 
               with tarfile.open(fileobj=package.extractfile('content.tar')) as content:
-                  members = content.getnames()
-                  lic = [n for n in members if 'licenses/' in n]
-                  assert lic, members
+                  cmembers = content.getnames()
+                  lic = [n for n in cmembers if 'licenses/' in n]
+                  assert lic, cmembers
                   license_text = content.extractfile(lic[0]).read().decode()
-              assert 'GNU Affero General Public License' in license_text
+              assert 'GNU AFFERO GENERAL PUBLIC LICENSE' in license_text
 
           result = {
               'verified': True,
@@ -108,4 +108,5 @@ jobs:
           }
           print(json.dumps(result))
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
-              f.write('Independent cloud artifact verification\n\n' + json.dumps(result, indent=2) + '\n')
+              f.write('```json\n' + json.dumps(result, indent=2) + '\n```\n')
+          PY

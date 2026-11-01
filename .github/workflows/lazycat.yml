@@ -1,11 +1,11 @@
-name: Build PicoShare LPK
+name: Build Rallly LPK
 on:
   workflow_dispatch:
 permissions:
   contents: write
   pull-requests: write
 concurrency:
-  group: picoshare-lpk
+  group: rallly-lpk
   cancel-in-progress: false
 jobs:
   lazycat:
