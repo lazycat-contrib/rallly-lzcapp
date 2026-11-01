@@ -1,6 +1,6 @@
 package: community.lazycat.app.rallly
 name: Rallly
-version: 4.9.2
+version: 4.16.4
 description: "Group scheduling polls to find the best meeting time without back-and-forth."
 min_os_version: "1.5.0"
 homepage: https://github.com/lukevella/rallly
